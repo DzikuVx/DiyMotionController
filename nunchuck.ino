@@ -2,14 +2,19 @@
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <HardwareSerial.h>
+#include <QmuTactile.h>
 #include "sbus.h"
 #include "math.h"
 
-#define SBUS_UPDATE_TASK_MS 15
-#define MPU6050_UPDATE_TASK_MS 30
-#define SERIAL_TASK_MS 50
-#define SERIAL1_RX 25
-#define SERIAL1_TX 14
+#define SBUS_UPDATE_TASK_MS         15
+#define MPU6050_UPDATE_TASK_MS      30
+#define SERIAL_TASK_MS              50
+#define SERIAL1_RX                  25
+#define SERIAL1_TX                  14
+
+#define PIN_BUTTON_UP               4
+#define PIN_BUTTON_DOWN             2
+#define PIN_BUTTON_TRIGGER          15
 
 Adafruit_MPU6050 mpu;
 sensors_event_t acc, gyro, temp;
@@ -46,6 +51,7 @@ typedef enum {
 #define AXIS_COUNT 3
 #define SBUS_CHANNEL_COUNT 16
 #define DEFAULT_CHANNEL_VALUE 1500
+#define THROTTLE_BUTTON_STEP 100
 
 enum calibrationState_e {
     CALIBARTION_NOT_DONE,
@@ -86,6 +92,11 @@ uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
 TaskHandle_t imuTask;
 
+QmuTactile buttonUp(PIN_BUTTON_UP);
+QmuTactile buttonDown(PIN_BUTTON_DOWN);
+QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
+
+
 void setup()
 {
     Serial.begin(115200);
@@ -105,6 +116,12 @@ void setup()
     mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
     mpu.setGyroRange(MPU6050_RANGE_250_DEG);
     mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+
+    delay(50);
+
+    buttonUp.start();
+    buttonDown.start();
+    buttonTrigger.start();
 
     xTaskCreatePinnedToCore(
         imuTaskHandler, /* Function to implement the task */
@@ -128,6 +145,10 @@ int getRcChannel_wrapper(uint8_t channel)
 
 void imuTaskHandler(void *pvParameters)
 {
+
+    buttonTrigger.loop();
+    buttonUp.loop();
+    buttonDown.loop();
 
     for (;;)
     {
@@ -214,12 +235,20 @@ void imuTaskHandler(void *pvParameters)
             }
             if (
                 isnan(imu.angle.x) ||
-                isnan(imu.angle.y)
+                isnan(imu.angle.y) ||
+                digitalRead(PIN_BUTTON_TRIGGER) != LOW
             ) {
                 //TODO Data is broken, time to reack
             } else {
                 output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
                 output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
+
+                if (digitalRead(PIN_BUTTON_UP) == LOW) {
+                    output.channels[THROTTLE] += THROTTLE_BUTTON_STEP;
+                }
+                if (digitalRead(PIN_BUTTON_DOWN) == LOW) {
+                    output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
+                }
 
             }
 
