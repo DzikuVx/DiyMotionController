@@ -30,19 +30,37 @@ typedef struct
     float x, y, z;
 } axis_t;
 
+typedef enum {
+    AXIS_X      = 0,
+    AXIS_Y      = 1,
+    AXIS_Z      = 2
+} axis_definition_e;
+
+#define AXIS_COUNT 3
+
+enum calibrationState_e {
+    CALIBARTION_NOT_DONE,
+    CALIBRATION_IN_PROGRESS,
+    CALIBRATION_DONE
+};
+
+typedef struct {
+    stdev_t deviation[AXIS_COUNT];
+    float accumulatedValue[AXIS_COUNT];
+    float zero[AXIS_COUNT];
+    uint32_t sampleCount;
+    uint8_t state = CALIBARTION_NOT_DONE;
+} gyroCalibration_t;
+
 typedef struct
 {
     axis_t gyro; // in DPS
-    axis_t accAngle;
-    axis_t gyroNormalized;
-    axis_t angle;
-    axis_t gyroZero;
+    axis_t accAngle;        // in degrees
+    axis_t gyroNormalized;  // in dps * dT
+    axis_t angle;           // angle from complimentary filter
 
-    stdev_t gyroCalDevX;
-    stdev_t gyroCalDevY;
-    stdev_t gyroCalDevZ;
-    uint32_t gyroCalSampleCount;
-    axis_t accumulatedValue;
+    gyroCalibration_t gyroCalibration;
+
 } imuData_t;
 
 imuData_t imu;
@@ -106,14 +124,6 @@ int getRcChannel_wrapper(uint8_t channel)
     }
 }
 
-enum calibrationState_e {
-    CALIBARTION_NOT_DONE,
-    CALIBRATION_IN_PROGRESS,
-    CALIBRATION_DONE
-};
-
-uint8_t gyroCalibrationState = CALIBARTION_NOT_DONE;
-
 void imuTaskHandler(void *pvParameters)
 {
 
@@ -133,9 +143,9 @@ void imuTaskHandler(void *pvParameters)
                 imu.accAngle.x = (atan(acc.acceleration.y / sqrt(pow(acc.acceleration.x, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
                 imu.accAngle.y = (atan(-1 * acc.acceleration.x / sqrt(pow(acc.acceleration.y, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
 
-                imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroZero.x;
-                imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroZero.y;
-                imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroZero.z;
+                imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_X];
+                imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Y];
+                imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Z];
 
                 imu.gyroNormalized.x = imu.gyro.x * dT;
                 imu.gyroNormalized.y = imu.gyro.y * dT;
@@ -147,44 +157,44 @@ void imuTaskHandler(void *pvParameters)
                 /*
                  * Calibration Routine
                  */
-                if (gyroCalibrationState == CALIBARTION_NOT_DONE) {
-                    gyroCalibrationState = CALIBRATION_IN_PROGRESS;
-                    imu.gyroCalSampleCount = 0;
-                    devClear(&imu.gyroCalDevX);
-                    devClear(&imu.gyroCalDevY);
-                    devClear(&imu.gyroCalDevZ);
-                    imu.accumulatedValue.x = 0;
-                    imu.accumulatedValue.y = 0;
-                    imu.accumulatedValue.z = 0;
+                if (imu.gyroCalibration.state == CALIBARTION_NOT_DONE) {
+                    imu.gyroCalibration.state = CALIBRATION_IN_PROGRESS;
+                    imu.gyroCalibration.sampleCount = 0;
+                    devClear(&imu.gyroCalibration.deviation[AXIS_X]);
+                    devClear(&imu.gyroCalibration.deviation[AXIS_Y]);
+                    devClear(&imu.gyroCalibration.deviation[AXIS_Z]);
+                    imu.gyroCalibration.accumulatedValue[AXIS_X] = 0;
+                    imu.gyroCalibration.accumulatedValue[AXIS_Y] = 0;
+                    imu.gyroCalibration.accumulatedValue[AXIS_Z] = 0;
                 }
-                if (gyroCalibrationState == CALIBRATION_IN_PROGRESS) {
-                    imu.gyroCalSampleCount++;
-                    devPush(&imu.gyroCalDevX, imu.gyro.x);
-                    devPush(&imu.gyroCalDevY, imu.gyro.y);
-                    devPush(&imu.gyroCalDevZ, imu.gyro.z);
-                    imu.accumulatedValue.x += imu.gyro.x;
-                    imu.accumulatedValue.y += imu.gyro.y;
-                    imu.accumulatedValue.z += imu.gyro.z;
+                if (imu.gyroCalibration.state == CALIBRATION_IN_PROGRESS) {
+                    imu.gyroCalibration.sampleCount++;
+                    devPush(&imu.gyroCalibration.deviation[AXIS_X], imu.gyro.x);
+                    devPush(&imu.gyroCalibration.deviation[AXIS_Y], imu.gyro.y);
+                    devPush(&imu.gyroCalibration.deviation[AXIS_Z], imu.gyro.z);
+                    imu.gyroCalibration.accumulatedValue[AXIS_X] += imu.gyro.x;
+                    imu.gyroCalibration.accumulatedValue[AXIS_Y] += imu.gyro.y;
+                    imu.gyroCalibration.accumulatedValue[AXIS_Z] += imu.gyro.z;
 
-                    if (imu.gyroCalSampleCount == 40) {
+                    if (imu.gyroCalibration.sampleCount == 40) {
                         
                         if (
-                            devStandardDeviation(&imu.gyroCalDevX) > 3.0f ||
-                            devStandardDeviation(&imu.gyroCalDevY) > 3.0f ||
-                            devStandardDeviation(&imu.gyroCalDevZ) > 3.0f
+                            devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_X]) > 3.0f ||
+                            devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_Y]) > 3.0f ||
+                            devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_Z]) > 3.0f
                         ) {
-                            imu.gyroCalSampleCount = 0;
-                            devClear(&imu.gyroCalDevX);
-                            devClear(&imu.gyroCalDevY);
-                            devClear(&imu.gyroCalDevZ);
-                            imu.accumulatedValue.x = 0;
-                            imu.accumulatedValue.y = 0;
-                            imu.accumulatedValue.z = 0;
+                            imu.gyroCalibration.sampleCount = 0;
+                            devClear(&imu.gyroCalibration.deviation[AXIS_X]);
+                            devClear(&imu.gyroCalibration.deviation[AXIS_Y]);
+                            devClear(&imu.gyroCalibration.deviation[AXIS_Z]);
+                            imu.gyroCalibration.accumulatedValue[AXIS_X] = 0;
+                            imu.gyroCalibration.accumulatedValue[AXIS_Y] = 0;
+                            imu.gyroCalibration.accumulatedValue[AXIS_Z] = 0;
                         } else {
-                            imu.gyroZero.x = imu.accumulatedValue.x / imu.gyroCalSampleCount;
-                            imu.gyroZero.y = imu.accumulatedValue.y / imu.gyroCalSampleCount;
-                            imu.gyroZero.z = imu.accumulatedValue.z / imu.gyroCalSampleCount;
-                            gyroCalibrationState = CALIBRATION_DONE;
+                            imu.gyroCalibration.zero[AXIS_X] = imu.gyroCalibration.accumulatedValue[AXIS_X] / imu.gyroCalibration.sampleCount;
+                            imu.gyroCalibration.zero[AXIS_Y] = imu.gyroCalibration.accumulatedValue[AXIS_Y] / imu.gyroCalibration.sampleCount;
+                            imu.gyroCalibration.zero[AXIS_Z] = imu.gyroCalibration.accumulatedValue[AXIS_Z] / imu.gyroCalibration.sampleCount;
+                            imu.gyroCalibration.state = CALIBRATION_DONE;
                         }
 
                     }
@@ -201,12 +211,6 @@ void imuTaskHandler(void *pvParameters)
 
 void loop()
 {
-    // currentMs = millis();
-
-    /*
-     * Read MPU6050 and compute current angle
-     */
-
     /* 
      * Send Trainer data in SBUS stream
      */
@@ -221,8 +225,8 @@ void loop()
     if (millis() > nextSerialTaskMs)
     {
         // Serial.println(String(imu.angle.x, 1) + " " + String(imu.angle.y, 1) + " " + String(imu.gyro.z, 1));
-        // Serial.println("Zero: " + String(imu.gyroZero.x, 2) + " " + String(imu.gyroZero.y, 2) + " " + String(imu.gyroZero.z, 2));
-        // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
+        Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
+        Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(devStandardDeviation(&imu.gyroCalDevX), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevY), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevZ), 1));
 
         nextSerialTaskMs = millis() + SERIAL_TASK_MS;
