@@ -28,3 +28,31 @@ float devStandardDeviation(stdev_t *dev)
 {
     return sqrtf(devVariance(dev));
 }
+
+float applyDeadband(float value, float deadband)
+{
+    if (fabsf(value) < deadband) {
+        value = 0;
+    } else if (value > 0) {
+        value -= deadband;
+    } else if (value < 0) {
+        value += deadband;
+    }
+    return value;
+}
+
+float fconstrainf(float amt, float low, float high)
+{
+    if (amt < low)
+        return low;
+    else if (amt > high)
+        return high;
+    else
+        return amt;
+}
+
+float fscalef(float x, float srcMin, float srcMax, float destMin, float destMax) {
+    const float a = (destMax - destMin) * (x - srcMin);
+    const float b = srcMax - srcMin;
+    return ((a / b) + destMin);
+}

@@ -6,7 +6,7 @@
 #include "math.h"
 
 #define SBUS_UPDATE_TASK_MS 15
-#define MPU6050_UPDATE_TASK_MS 25
+#define MPU6050_UPDATE_TASK_MS 30
 #define SERIAL_TASK_MS 50
 #define SERIAL1_RX 25
 #define SERIAL1_TX 14
@@ -36,7 +36,16 @@ typedef enum {
     AXIS_Z      = 2
 } axis_definition_e;
 
+typedef enum {
+    ROLL        = 0,
+    PITCH       = 1,
+    THROTTLE    = 2,
+    YAW         = 3
+} channel_functions_e;
+
 #define AXIS_COUNT 3
+#define SBUS_CHANNEL_COUNT 16
+#define DEFAULT_CHANNEL_VALUE 1500
 
 enum calibrationState_e {
     CALIBARTION_NOT_DONE,
@@ -64,6 +73,14 @@ typedef struct
 } imuData_t;
 
 imuData_t imu;
+
+typedef struct {
+    uint16_t channels[SBUS_CHANNEL_COUNT];
+
+
+} dataOutput_t;
+
+dataOutput_t output;
 
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
@@ -102,25 +119,10 @@ void setup()
 //I do not get function pointers to object methods, no way...
 int getRcChannel_wrapper(uint8_t channel)
 {
-    if (channel == 0)
-    {
-        return 1700;
-    }
-    else if (channel == 1)
-    {
-        return 1400;
-    }
-    else if (channel == 2)
-    {
-        return 1800;
-    }
-    else if (channel == 3)
-    {
-        return 1200;
-    }
-    else
-    {
-        return 1500;
+    if (channel >= 0 && channel < SBUS_CHANNEL_COUNT) {
+        return output.channels[channel];
+    } else {
+        return DEFAULT_CHANNEL_VALUE;
     }
 }
 
@@ -129,9 +131,11 @@ void imuTaskHandler(void *pvParameters)
 
     for (;;)
     {
-
         if (millis() > nextAccTaskMs)
         {
+            /*
+             * Read gyro
+             */
             static uint32_t prevMicros = 0;
             float dT = (micros() - prevMicros) * 0.000001f;
             prevMicros = micros();
@@ -202,11 +206,33 @@ void imuTaskHandler(void *pvParameters)
 
             }
 
+            /*
+             * Prepare new data
+             */
+            for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++) {
+                output.channels[i] = DEFAULT_CHANNEL_VALUE;
+            }
+            if (
+                isnan(imu.angle.x) ||
+                isnan(imu.angle.y)
+            ) {
+                //TODO Data is broken, time to reack
+            } else {
+                output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
+                output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
+
+            }
+
             nextAccTaskMs = millis() + MPU6050_UPDATE_TASK_MS;
         }
     }
 
     vTaskDelete(NULL);
+}
+
+int angleToRcChannel(float angle) {
+    const float value = fconstrainf(applyDeadband(angle, 5.0f), -45.0f, 45.0f); //5 deg deadband
+    return (int) fscalef(value, -45.0f, 45.0f, -500, 500);
 }
 
 void loop()
@@ -225,9 +251,10 @@ void loop()
     if (millis() > nextSerialTaskMs)
     {
         // Serial.println(String(imu.angle.x, 1) + " " + String(imu.angle.y, 1) + " " + String(imu.gyro.z, 1));
-        Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
-        Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
+        // Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
+        // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(devStandardDeviation(&imu.gyroCalDevX), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevY), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevZ), 1));
+        Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
 
         nextSerialTaskMs = millis() + SERIAL_TASK_MS;
     }
