@@ -8,6 +8,7 @@
 
 #define SBUS_UPDATE_TASK_MS 15
 #define MPU6050_UPDATE_TASK_MS 30
+#define OUTPUT_UPDATE_TASK_MS 20
 #define SERIAL_TASK_MS 50
 #define SERIAL1_RX 25
 #define SERIAL1_TX 14
@@ -160,6 +161,10 @@ int getRcChannel_wrapper(uint8_t channel)
 
 void outputTaskHandler(void *pvParameters)
 {
+    portTickType xLastWakeTime;
+    const portTickType xPeriod = OUTPUT_UPDATE_TASK_MS / portTICK_PERIOD_MS;
+    xLastWakeTime = xTaskGetTickCount();
+
     for (;;)
     {
         for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++)
@@ -189,8 +194,8 @@ void outputTaskHandler(void *pvParameters)
             }
         }
 
-        //We handle output mapping every 25ms
-        vTaskDelay(25 / portTICK_PERIOD_MS);
+        // Put task to sleep
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
     }
 
     vTaskDelete(NULL);
@@ -198,11 +203,15 @@ void outputTaskHandler(void *pvParameters)
 
 void imuTaskHandler(void *pvParameters)
 {
+    portTickType xLastWakeTime;
+    const portTickType xPeriod = MPU6050_UPDATE_TASK_MS / portTICK_PERIOD_MS;
+    xLastWakeTime = xTaskGetTickCount();
+
     for (;;)
     {
         /*
-             * Read gyro
-             */
+        * Read gyro
+        */
         static uint32_t prevMicros = 0;
         float dT = (micros() - prevMicros) * 0.000001f;
         prevMicros = micros();
@@ -276,8 +285,8 @@ void imuTaskHandler(void *pvParameters)
             }
         }
 
-        // Allow other tasks to run
-        vTaskDelay(MPU6050_UPDATE_TASK_MS / portTICK_PERIOD_MS);
+        // Put task to sleep
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
     }
 
     vTaskDelete(NULL);

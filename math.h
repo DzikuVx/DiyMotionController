@@ -1,6 +1,8 @@
 #ifndef MATH_H
 #define MATH_H
 
+#include "Arduino.h"
+
 typedef struct stdev_s
 {
     float m_oldM, m_newM, m_oldS, m_newS;
