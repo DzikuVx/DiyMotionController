@@ -164,9 +164,18 @@ void outputTaskHandler(void *pvParameters)
     portTickType xLastWakeTime;
     const portTickType xPeriod = OUTPUT_UPDATE_TASK_MS / portTICK_PERIOD_MS;
     xLastWakeTime = xTaskGetTickCount();
+    uint8_t prevTriggerButtonState;
+    uint8_t triggerButtonState;
 
     for (;;)
     {
+        triggerButtonState = digitalRead(PIN_BUTTON_TRIGGER);
+
+        //On trigger press, reset yaw
+        if (triggerButtonState == LOW && prevTriggerButtonState == HIGH) {
+            imu.angle.z = 0;
+        }
+
         for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++)
         {
             output.channels[i] = DEFAULT_CHANNEL_VALUE;
@@ -183,6 +192,7 @@ void outputTaskHandler(void *pvParameters)
         {
             output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
             output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
+            output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z);
 
             if (digitalRead(PIN_BUTTON_UP) == LOW)
             {
@@ -193,6 +203,8 @@ void outputTaskHandler(void *pvParameters)
                 output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
             }
         }
+
+        prevTriggerButtonState = triggerButtonState;
 
         // Put task to sleep
         vTaskDelayUntil(&xLastWakeTime, xPeriod);
@@ -233,6 +245,7 @@ void imuTaskHandler(void *pvParameters)
 
             imu.angle.x = (0.95 * (imu.angle.x + imu.gyroNormalized.x)) + (0.05 * imu.accAngle.x);
             imu.angle.y = (0.95 * (imu.angle.y + imu.gyroNormalized.y)) + (0.05 * imu.accAngle.y);
+            imu.angle.z = imu.angle.z + imu.gyroNormalized.z;
 
             /*
              * Calibration Routine
@@ -304,6 +317,7 @@ void loop()
     buttonUp.loop();
     buttonDown.loop();
 
+
     /* 
      * Send Trainer data in SBUS stream
      */
@@ -317,6 +331,7 @@ void loop()
 
     if (millis() > nextSerialTaskMs)
     {
+        // Serial.println(String(imu.angle.z, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(imu.angle.x, 1) + " " + String(imu.angle.y, 1) + " " + String(imu.gyro.z, 1));
         // Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
         // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
