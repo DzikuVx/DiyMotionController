@@ -5,6 +5,7 @@
 #include <QmuTactile.h>
 #include "sbus.h"
 #include "math.h"
+#include "types.h"
 
 #define SBUS_UPDATE_TASK_MS 15
 #define MPU6050_UPDATE_TASK_MS 30
@@ -17,80 +18,19 @@
 #define PIN_BUTTON_DOWN 2
 #define PIN_BUTTON_TRIGGER 15
 
+#define PIN_THUMB_JOYSTICK_X 13
+#define PIN_THUMB_JOYSTICK_Y 33
+#define PIN_THUMB_JOYSTICK_SW 32
+
 Adafruit_MPU6050 mpu;
 sensors_event_t acc, gyro, temp;
 
 uint32_t nextSbusTaskMs = 0;
 uint32_t nextSerialTaskMs = 0;
 
-float accAngleX;
-float accAngleY;
-
-float gyroX;
-float gyroY;
-float gyroZ;
-
-typedef struct
-{
-    float x, y, z;
-} axis_t;
-
-typedef enum
-{
-    AXIS_X = 0,
-    AXIS_Y = 1,
-    AXIS_Z = 2
-} axis_definition_e;
-
-typedef enum
-{
-    ROLL = 0,
-    PITCH = 1,
-    THROTTLE = 2,
-    YAW = 3
-} channel_functions_e;
-
-#define AXIS_COUNT 3
-#define SBUS_CHANNEL_COUNT 16
-#define DEFAULT_CHANNEL_VALUE 1500
-#define THROTTLE_BUTTON_STEP 100
-
-enum calibrationState_e
-{
-    CALIBARTION_NOT_DONE,
-    CALIBRATION_IN_PROGRESS,
-    CALIBRATION_DONE
-};
-
-typedef struct
-{
-    stdev_t deviation[AXIS_COUNT];
-    float accumulatedValue[AXIS_COUNT];
-    float zero[AXIS_COUNT];
-    uint32_t sampleCount;
-    uint8_t state = CALIBARTION_NOT_DONE;
-} gyroCalibration_t;
-
-typedef struct
-{
-    axis_t gyro;           // in DPS
-    axis_t accAngle;       // in degrees
-    axis_t gyroNormalized; // in dps * dT
-    axis_t angle;          // angle from complimentary filter
-
-    gyroCalibration_t gyroCalibration;
-
-} imuData_t;
-
 imuData_t imu;
-
-typedef struct
-{
-    uint16_t channels[SBUS_CHANNEL_COUNT];
-
-} dataOutput_t;
-
 dataOutput_t output;
+thumb_joystick_t thumbJoystick;
 
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
@@ -100,6 +40,56 @@ TaskHandle_t outputTask;
 QmuTactile buttonUp(PIN_BUTTON_UP);
 QmuTactile buttonDown(PIN_BUTTON_DOWN);
 QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
+
+void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY, float sampleZ, const float dev)
+{
+    if (cal->state == CALIBARTION_NOT_DONE)
+    {
+        cal->state = CALIBRATION_IN_PROGRESS;
+        cal->sampleCount = 0;
+        devClear(&cal->deviation[AXIS_X]);
+        devClear(&cal->deviation[AXIS_Y]);
+        devClear(&cal->deviation[AXIS_Z]);
+        cal->accumulatedValue[AXIS_X] = 0;
+        cal->accumulatedValue[AXIS_Y] = 0;
+        cal->accumulatedValue[AXIS_Z] = 0;
+    }
+    if (cal->state == CALIBRATION_IN_PROGRESS)
+    {
+        cal->sampleCount++;
+        devPush(&cal->deviation[AXIS_X], sampleX);
+        devPush(&cal->deviation[AXIS_Y], sampleY);
+        devPush(&cal->deviation[AXIS_Z], sampleZ);
+        cal->accumulatedValue[AXIS_X] += sampleX;
+        cal->accumulatedValue[AXIS_Y] += sampleY;
+        cal->accumulatedValue[AXIS_Z] += sampleZ;
+
+        if (cal->sampleCount == 40)
+        {
+
+            if (
+                devStandardDeviation(&cal->deviation[AXIS_X]) > dev ||
+                devStandardDeviation(&cal->deviation[AXIS_Y]) > dev ||
+                devStandardDeviation(&cal->deviation[AXIS_Z]) > dev)
+            {
+                cal->sampleCount = 0;
+                devClear(&cal->deviation[AXIS_X]);
+                devClear(&cal->deviation[AXIS_Y]);
+                devClear(&cal->deviation[AXIS_Z]);
+                cal->accumulatedValue[AXIS_X] = 0;
+                cal->accumulatedValue[AXIS_Y] = 0;
+                cal->accumulatedValue[AXIS_Z] = 0;
+            }
+            else
+            {
+                cal->zero[AXIS_X] = cal->accumulatedValue[AXIS_X] / cal->sampleCount;
+                cal->zero[AXIS_Y] = cal->accumulatedValue[AXIS_Y] / cal->sampleCount;
+                cal->zero[AXIS_Z] = cal->accumulatedValue[AXIS_Z] / cal->sampleCount;
+                cal->state = CALIBRATION_DONE;
+            }
+        }
+    }
+}
 
 void setup()
 {
@@ -126,6 +116,7 @@ void setup()
     buttonUp.start();
     buttonDown.start();
     buttonTrigger.start();
+    pinMode(PIN_THUMB_JOYSTICK_SW, INPUT_PULLUP);
 
     xTaskCreatePinnedToCore(
         imuTaskHandler, /* Function to implement the task */
@@ -159,6 +150,29 @@ int getRcChannel_wrapper(uint8_t channel)
     }
 }
 
+void processJoystickAxis(uint8_t axis, uint8_t pin) {
+    thumbJoystick.raw[axis] = analogRead(pin);
+    thumbJoystick.zeroed[axis] = thumbJoystick.calibration.zero[axis] - thumbJoystick.raw[axis];
+
+    if (thumbJoystick.calibration.state == CALIBRATION_DONE) {
+
+        if (thumbJoystick.zeroed[axis] > thumbJoystick.max[axis]) {
+            thumbJoystick.max[axis] = thumbJoystick.zeroed[axis];
+        }
+
+        if (thumbJoystick.zeroed[axis] < thumbJoystick.min[axis]) {
+            thumbJoystick.min[axis] = thumbJoystick.zeroed[axis];
+        }
+
+        if (thumbJoystick.zeroed[axis] > 0) {
+            thumbJoystick.position[axis] = fscalef(thumbJoystick.zeroed[axis], 0, thumbJoystick.max[axis], 0.0f, 1.0f);
+        } else {
+            thumbJoystick.position[axis] = fscalef(thumbJoystick.zeroed[axis], thumbJoystick.min[axis], 0, -1.0f, 0.0f);
+        }
+
+    }
+}
+
 void outputTaskHandler(void *pvParameters)
 {
     portTickType xLastWakeTime;
@@ -169,10 +183,19 @@ void outputTaskHandler(void *pvParameters)
 
     for (;;)
     {
+
+        /*
+         * Joystick handling
+         */
+        processJoystickAxis(AXIS_X, PIN_THUMB_JOYSTICK_X);
+        processJoystickAxis(AXIS_Y, PIN_THUMB_JOYSTICK_Y);
+        sensorCalibrate(&thumbJoystick.calibration, thumbJoystick.raw[AXIS_X], thumbJoystick.raw[AXIS_Y], 0, 3.0f);
+
         triggerButtonState = digitalRead(PIN_BUTTON_TRIGGER);
 
         //On trigger press, reset yaw
-        if (triggerButtonState == LOW && prevTriggerButtonState == HIGH) {
+        if (triggerButtonState == LOW && prevTriggerButtonState == HIGH)
+        {
             imu.angle.z = 0;
         }
 
@@ -192,7 +215,8 @@ void outputTaskHandler(void *pvParameters)
         {
             output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
             output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
-            output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z);
+            output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
+            output.channels[THROTTLE] = DEFAULT_CHANNEL_VALUE + joystickToRcChannel(thumbJoystick.position[AXIS_Y]);
 
             if (digitalRead(PIN_BUTTON_UP) == LOW)
             {
@@ -202,6 +226,7 @@ void outputTaskHandler(void *pvParameters)
             {
                 output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
             }
+
         }
 
         prevTriggerButtonState = triggerButtonState;
@@ -246,56 +271,11 @@ void imuTaskHandler(void *pvParameters)
             imu.angle.x = (0.95 * (imu.angle.x + imu.gyroNormalized.x)) + (0.05 * imu.accAngle.x);
             imu.angle.y = (0.95 * (imu.angle.y + imu.gyroNormalized.y)) + (0.05 * imu.accAngle.y);
             imu.angle.z = imu.angle.z + imu.gyroNormalized.z;
-
+            
             /*
              * Calibration Routine
              */
-            if (imu.gyroCalibration.state == CALIBARTION_NOT_DONE)
-            {
-                imu.gyroCalibration.state = CALIBRATION_IN_PROGRESS;
-                imu.gyroCalibration.sampleCount = 0;
-                devClear(&imu.gyroCalibration.deviation[AXIS_X]);
-                devClear(&imu.gyroCalibration.deviation[AXIS_Y]);
-                devClear(&imu.gyroCalibration.deviation[AXIS_Z]);
-                imu.gyroCalibration.accumulatedValue[AXIS_X] = 0;
-                imu.gyroCalibration.accumulatedValue[AXIS_Y] = 0;
-                imu.gyroCalibration.accumulatedValue[AXIS_Z] = 0;
-            }
-            if (imu.gyroCalibration.state == CALIBRATION_IN_PROGRESS)
-            {
-                imu.gyroCalibration.sampleCount++;
-                devPush(&imu.gyroCalibration.deviation[AXIS_X], imu.gyro.x);
-                devPush(&imu.gyroCalibration.deviation[AXIS_Y], imu.gyro.y);
-                devPush(&imu.gyroCalibration.deviation[AXIS_Z], imu.gyro.z);
-                imu.gyroCalibration.accumulatedValue[AXIS_X] += imu.gyro.x;
-                imu.gyroCalibration.accumulatedValue[AXIS_Y] += imu.gyro.y;
-                imu.gyroCalibration.accumulatedValue[AXIS_Z] += imu.gyro.z;
-
-                if (imu.gyroCalibration.sampleCount == 40)
-                {
-
-                    if (
-                        devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_X]) > 3.0f ||
-                        devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_Y]) > 3.0f ||
-                        devStandardDeviation(&imu.gyroCalibration.deviation[AXIS_Z]) > 3.0f)
-                    {
-                        imu.gyroCalibration.sampleCount = 0;
-                        devClear(&imu.gyroCalibration.deviation[AXIS_X]);
-                        devClear(&imu.gyroCalibration.deviation[AXIS_Y]);
-                        devClear(&imu.gyroCalibration.deviation[AXIS_Z]);
-                        imu.gyroCalibration.accumulatedValue[AXIS_X] = 0;
-                        imu.gyroCalibration.accumulatedValue[AXIS_Y] = 0;
-                        imu.gyroCalibration.accumulatedValue[AXIS_Z] = 0;
-                    }
-                    else
-                    {
-                        imu.gyroCalibration.zero[AXIS_X] = imu.gyroCalibration.accumulatedValue[AXIS_X] / imu.gyroCalibration.sampleCount;
-                        imu.gyroCalibration.zero[AXIS_Y] = imu.gyroCalibration.accumulatedValue[AXIS_Y] / imu.gyroCalibration.sampleCount;
-                        imu.gyroCalibration.zero[AXIS_Z] = imu.gyroCalibration.accumulatedValue[AXIS_Z] / imu.gyroCalibration.sampleCount;
-                        imu.gyroCalibration.state = CALIBRATION_DONE;
-                    }
-                }
-            }
+            sensorCalibrate(&imu.gyroCalibration, imu.gyro.x, imu.gyro.y, imu.gyro.z, 3.0f);
         }
 
         // Put task to sleep
@@ -311,12 +291,17 @@ int angleToRcChannel(float angle)
     return (int)fscalef(value, -45.0f, 45.0f, -500, 500);
 }
 
+int joystickToRcChannel(float angle)
+{
+    const float value = fconstrainf(applyDeadband(angle, 0.05f), -1.0f, 1.0f); 
+    return (int)fscalef(value, -1.0f, 1.0f, -200, 200);
+}
+
 void loop()
 {
     buttonTrigger.loop();
     buttonUp.loop();
     buttonDown.loop();
-
 
     /* 
      * Send Trainer data in SBUS stream
@@ -336,7 +321,11 @@ void loop()
         // Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
         // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(devStandardDeviation(&imu.gyroCalDevX), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevY), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevZ), 1));
-        Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
+        // Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
+        // Serial.println("Zero: " + String(thumbJoystick.calibration.zero[AXIS_X], 2) + " " + String(thumbJoystick.calibration.zero[AXIS_Y], 2));
+        // Serial.println(String(thumbJoystick.raw[AXIS_X]) + " " + String(thumbJoystick.raw[AXIS_Y]) + " " + digitalRead(PIN_THUMB_JOYSTICK_SW));
+        // Serial.println(String(thumbJoystick.zeroed[AXIS_X]) + " " + String(thumbJoystick.max[AXIS_X]) + " " + String(thumbJoystick.min[AXIS_X]));
+        // Serial.println(String(thumbJoystick.position[AXIS_X], 2) + " " + String(thumbJoystick.position[AXIS_Y], 2));
 
         nextSerialTaskMs = millis() + SERIAL_TASK_MS;
     }
