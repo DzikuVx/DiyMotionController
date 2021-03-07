@@ -37,10 +37,6 @@ HardwareSerial sbusSerial(1);
 TaskHandle_t imuTask;
 TaskHandle_t outputTask;
 
-QmuTactile buttonUp(PIN_BUTTON_UP);
-QmuTactile buttonDown(PIN_BUTTON_DOWN);
-QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
-
 void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY, float sampleZ, const float dev)
 {
     if (cal->state == CALIBARTION_NOT_DONE)
@@ -113,9 +109,6 @@ void setup()
 
     delay(50);
 
-    buttonUp.start();
-    buttonDown.start();
-    buttonTrigger.start();
     pinMode(PIN_THUMB_JOYSTICK_SW, INPUT_PULLUP);
 
     xTaskCreatePinnedToCore(
@@ -299,10 +292,6 @@ int joystickToRcChannel(float angle)
 
 void loop()
 {
-    buttonTrigger.loop();
-    buttonUp.loop();
-    buttonDown.loop();
-
     /* 
      * Send Trainer data in SBUS stream
      */
@@ -321,7 +310,7 @@ void loop()
         // Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
         // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(devStandardDeviation(&imu.gyroCalDevX), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevY), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevZ), 1));
-        // Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
+        Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
         // Serial.println("Zero: " + String(thumbJoystick.calibration.zero[AXIS_X], 2) + " " + String(thumbJoystick.calibration.zero[AXIS_Y], 2));
         // Serial.println(String(thumbJoystick.raw[AXIS_X]) + " " + String(thumbJoystick.raw[AXIS_Y]) + " " + digitalRead(PIN_THUMB_JOYSTICK_SW));
         // Serial.println(String(thumbJoystick.zeroed[AXIS_X]) + " " + String(thumbJoystick.max[AXIS_X]) + " " + String(thumbJoystick.min[AXIS_X]));
