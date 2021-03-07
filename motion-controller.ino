@@ -23,13 +23,6 @@ sensors_event_t acc, gyro, temp;
 uint32_t nextSbusTaskMs = 0;
 uint32_t nextSerialTaskMs = 0;
 
-float accAngleX;
-float accAngleY;
-
-float gyroX;
-float gyroY;
-float gyroZ;
-
 typedef struct
 {
     float x, y, z;
@@ -97,10 +90,6 @@ HardwareSerial sbusSerial(1);
 TaskHandle_t imuTask;
 TaskHandle_t outputTask;
 
-QmuTactile buttonUp(PIN_BUTTON_UP);
-QmuTactile buttonDown(PIN_BUTTON_DOWN);
-QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
-
 void setup()
 {
     Serial.begin(115200);
@@ -122,10 +111,6 @@ void setup()
     mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
 
     delay(50);
-
-    buttonUp.start();
-    buttonDown.start();
-    buttonTrigger.start();
 
     xTaskCreatePinnedToCore(
         imuTaskHandler, /* Function to implement the task */
@@ -313,11 +298,6 @@ int angleToRcChannel(float angle)
 
 void loop()
 {
-    buttonTrigger.loop();
-    buttonUp.loop();
-    buttonDown.loop();
-
-
     /* 
      * Send Trainer data in SBUS stream
      */
