@@ -2,7 +2,7 @@
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <HardwareSerial.h>
-#include <QmuTactile.h>
+#include "QmuTactile.h"
 #include "sbus.h"
 #include "math.h"
 #include "types.h"
@@ -41,10 +41,15 @@ DeviceNode device;
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
 TaskHandle_t i2cResourceTask;
-TaskHandle_t outputTask;
+TaskHandle_t ioTask;
 
 SSD1306 display(0x3c, I2C_SDA_PIN, I2C_SCL_PIN);
 OledDisplay oledDisplay(&display);
+
+QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
+QmuTactile buttonUp(PIN_BUTTON_UP);
+QmuTactile buttonDown(PIN_BUTTON_DOWN);
+QmuTactile buttonJoystick(PIN_THUMB_JOYSTICK_SW);
 
 void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY, float sampleZ, const float dev)
 {
@@ -123,10 +128,10 @@ void setup()
 
     delay(50);
 
-    pinMode(PIN_THUMB_JOYSTICK_SW, INPUT_PULLUP);
-    pinMode(PIN_BUTTON_TRIGGER, INPUT_PULLUP);
-    pinMode(PIN_BUTTON_UP, INPUT_PULLUP);
-    pinMode(PIN_BUTTON_DOWN, INPUT_PULLUP);
+    buttonTrigger.start();
+    buttonUp.start();
+    buttonDown.start();
+    buttonJoystick.start();
 
     xTaskCreatePinnedToCore(
         i2cResourceTaskHandler, /* Function to implement the task */
@@ -138,12 +143,12 @@ void setup()
         0);
 
     xTaskCreatePinnedToCore(
-        outputTaskHandler, /* Function to implement the task */
-        "outputTask",      /* Name of the task */
-        10000,             /* Stack size in words */
-        NULL,              /* Task input parameter */
-        0,                 /* Priority of the task */
-        &outputTask,       /* Task handle. */
+        ioTaskHandler, /* Function to implement the task */
+        "outputTask",  /* Name of the task */
+        10000,         /* Stack size in words */
+        NULL,          /* Task input parameter */
+        0,             /* Priority of the task */
+        &ioTask,       /* Task handle. */
         0);
 }
 
@@ -189,16 +194,60 @@ void processJoystickAxis(uint8_t axis, uint8_t pin)
     }
 }
 
-void outputTaskHandler(void *pvParameters)
+void outputSubtask()
+{
+    if (buttonTrigger.checkFlag(TACTILE_FLAG_EDGE_PRESSED))
+    {
+        imu.angle.z = 0;
+    }
+
+    for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++)
+    {
+        output.channels[i] = DEFAULT_CHANNEL_VALUE;
+    }
+
+    if (buttonTrigger.getState() == TACTILE_STATE_SHORT_PRESS) {
+        device.setActionEnabled(!device.getActionEnabled());
+    }
+
+    if (
+        isnan(imu.angle.x) ||
+        isnan(imu.angle.y) 
+    ) {
+        //TODO Data is broken, time to react or just do nothing
+        device.setActionEnabled(false);
+    }
+
+    if (device.getActionEnabled()) 
+    {
+        output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
+        output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
+        output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
+        output.channels[THROTTLE] = DEFAULT_CHANNEL_VALUE + joystickToRcChannel(thumbJoystick.position[AXIS_Y]);
+
+        if (buttonUp.checkFlag(TACTILE_FLAG_PRESSED))
+        {
+            output.channels[THROTTLE] += THROTTLE_BUTTON_STEP;
+        }
+        if (buttonDown.checkFlag(TACTILE_FLAG_PRESSED))
+        {
+            output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
+        }
+    }
+}
+
+void ioTaskHandler(void *pvParameters)
 {
     portTickType xLastWakeTime;
     const portTickType xPeriod = OUTPUT_UPDATE_TASK_MS / portTICK_PERIOD_MS;
     xLastWakeTime = xTaskGetTickCount();
-    uint8_t prevTriggerButtonState;
-    uint8_t triggerButtonState;
 
     for (;;)
     {
+        buttonTrigger.loop();
+        buttonJoystick.loop();
+        buttonUp.loop();
+        buttonDown.loop();
 
         /*
          * Joystick handling
@@ -207,46 +256,7 @@ void outputTaskHandler(void *pvParameters)
         processJoystickAxis(AXIS_Y, PIN_THUMB_JOYSTICK_Y);
         sensorCalibrate(&thumbJoystick.calibration, thumbJoystick.raw[AXIS_X], thumbJoystick.raw[AXIS_Y], 0, 3.0f);
 
-        triggerButtonState = digitalRead(PIN_BUTTON_TRIGGER);
-
-        //On trigger press, reset yaw
-        if (triggerButtonState == LOW && prevTriggerButtonState == HIGH)
-        {
-            imu.angle.z = 0;
-        }
-
-        for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++)
-        {
-            output.channels[i] = DEFAULT_CHANNEL_VALUE;
-        }
-
-        if (
-            isnan(imu.angle.x) ||
-            isnan(imu.angle.y) ||
-            digitalRead(PIN_BUTTON_TRIGGER) != LOW)
-        {
-            //TODO Data is broken, time to react or just do nothing
-            device.setActionEnabled(false);
-        }
-        else
-        {
-            device.setActionEnabled(true);
-            output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
-            output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
-            output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
-            output.channels[THROTTLE] = DEFAULT_CHANNEL_VALUE + joystickToRcChannel(thumbJoystick.position[AXIS_Y]);
-
-            if (digitalRead(PIN_BUTTON_UP) == LOW)
-            {
-                output.channels[THROTTLE] += THROTTLE_BUTTON_STEP;
-            }
-            if (digitalRead(PIN_BUTTON_DOWN) == LOW)
-            {
-                output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
-            }
-        }
-
-        prevTriggerButtonState = triggerButtonState;
+        outputSubtask();
 
         // Put task to sleep
         vTaskDelayUntil(&xLastWakeTime, xPeriod);
@@ -325,7 +335,7 @@ int angleToRcChannel(float angle)
 
 int joystickToRcChannel(float angle)
 {
-    const float value = fconstrainf(applyDeadband(angle, 0.05f), -1.0f, 1.0f);
+    const float value = fconstrainf(applyDeadband(angle, 0.02f), -1.0f, 1.0f);
     return (int)fscalef(value, -1.0f, 1.0f, -200, 200);
 }
 
@@ -349,7 +359,7 @@ void loop()
         // Serial.println("Zero: " + String(imu.gyroCalibration.zero[AXIS_X], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Y], 2) + " " + String(imu.gyroCalibration.zero[AXIS_Z], 2));
         // Serial.println("Gyro: " + String(imu.gyro.x, 2) + " " + String(imu.gyro.y, 2) + " " + String(imu.gyro.z, 2));
         // Serial.println(String(devStandardDeviation(&imu.gyroCalDevX), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevY), 1) + " " + String(devStandardDeviation(&imu.gyroCalDevZ), 1));
-        Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
+        // Serial.println(String(output.channels[ROLL]) + " " + String(output.channels[PITCH]) + " " + String(output.channels[THROTTLE]) + " " + String(output.channels[YAW]));
         // Serial.println("Zero: " + String(thumbJoystick.calibration.zero[AXIS_X], 2) + " " + String(thumbJoystick.calibration.zero[AXIS_Y], 2));
         // Serial.println(String(thumbJoystick.raw[AXIS_X]) + " " + String(thumbJoystick.raw[AXIS_Y]) + " " + digitalRead(PIN_THUMB_JOYSTICK_SW));
         // Serial.println(String(thumbJoystick.zeroed[AXIS_X]) + " " + String(thumbJoystick.max[AXIS_X]) + " " + String(thumbJoystick.min[AXIS_X]));
