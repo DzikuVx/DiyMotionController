@@ -45,6 +45,8 @@ void OledDisplay::renderPageStatus() {
     String val;
 
     _display->setFont(ArialMT_Plain_10);
+    
+    //Gyro calibration
     if (imu.gyroCalibration.state == CALIBRATION_DONE) {
         val = "Gyro: OK";
     } else {
@@ -52,8 +54,26 @@ void OledDisplay::renderPageStatus() {
     }
     _display->drawString(0, 0, val);
 
-    _display->setFont(ArialMT_Plain_16);
-    _display->drawString(0, 32, "OK");
+    //Gyro calibration
+    if (
+        thumbJoystick.calibration.state == CALIBRATION_DONE &&
+        thumbJoystick.max[AXIS_X] > 750 && 
+        thumbJoystick.max[AXIS_Y] > 750 &&
+        thumbJoystick.min[AXIS_X] < -750 && 
+        thumbJoystick.min[AXIS_Y] < -750
+    ) {
+        val = "Stick: OK";
+    } else {
+        val = "Stick: Cal";
+    }
+    _display->drawString(64, 0, val);
+
+    _display->setFont(ArialMT_Plain_24);
+    if (device.getActionEnabled()) {
+        _display->drawString(46, 16, "Hot");
+    } else {
+        _display->drawString(36, 16, "Safe");
+    }
 
     _display->display();
 }

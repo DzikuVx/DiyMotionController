@@ -4,8 +4,11 @@
 #include "SSD1306.h"
 #include "math.h"
 #include "types.h"
+#include "device_node.h"
 
 extern imuData_t imu;
+extern thumb_joystick_t thumbJoystick;
+extern DeviceNode device;
 
 enum txOledPages {
     OLED_PAGE_NONE,

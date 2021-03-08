@@ -8,6 +8,7 @@
 #include "types.h"
 #include "SSD1306.h"
 #include "oled_display.h"
+#include "device_node.h"
 
 #define SBUS_UPDATE_TASK_MS 15
 #define MPU6050_UPDATE_TASK_MS 30
@@ -35,6 +36,7 @@ uint32_t nextSerialTaskMs = 0;
 imuData_t imu;
 dataOutput_t output;
 thumb_joystick_t thumbJoystick;
+DeviceNode device;
 
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
@@ -221,9 +223,11 @@ void outputTaskHandler(void *pvParameters)
             digitalRead(PIN_BUTTON_TRIGGER) != LOW)
         {
             //TODO Data is broken, time to react or just do nothing
+            device.setActionEnabled(false);
         }
         else
         {
+            device.setActionEnabled(true);
             output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
             output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
             output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
