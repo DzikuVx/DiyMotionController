@@ -4,6 +4,10 @@
 #define DEVICE_NODE_H
 
 #include <Arduino.h>
+#include "math.h"
+#include "types.h"
+
+extern dataOutput_t output;
 
 enum deviceMode_e {
     DEVICE_MODE_MOTION_CONTROLLER = 0,

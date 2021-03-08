@@ -124,6 +124,9 @@ void setup()
     delay(50);
 
     pinMode(PIN_THUMB_JOYSTICK_SW, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_TRIGGER, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_UP, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_DOWN, INPUT_PULLUP);
 
     xTaskCreatePinnedToCore(
         i2cResourceTaskHandler, /* Function to implement the task */

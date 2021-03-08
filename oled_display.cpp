@@ -1,5 +1,6 @@
 #include "oled_display.h"
 #include "Arduino.h"
+#include "math.h"
 
 OledDisplay::OledDisplay(SSD1306 *display) {
     _display = display;
@@ -71,6 +72,13 @@ void OledDisplay::renderPageStatus() {
     _display->setFont(ArialMT_Plain_24);
     if (device.getActionEnabled()) {
         _display->drawString(46, 16, "Hot");
+
+        _display->setFont(ArialMT_Plain_10);
+        _display->drawString(0, 42, "R:" + String(fscalef(output.channels[ROLL] - 1500, -500, 500, -100, 100), 0) + "%");
+        _display->drawString(0, 52, "T:" + String(fscalef(output.channels[THROTTLE] - 1500, -500, 500, -100, 100), 0) + "%");
+        _display->drawString(64, 42, "P:" + String(fscalef(output.channels[PITCH] - 1500, -500, 500, -100, 100), 0) + "%");
+        _display->drawString(64, 52, "Y:" + String(fscalef(output.channels[YAW] - 1500, -500, 500, -100, 100), 0) + "%");
+
     } else {
         _display->drawString(36, 16, "Safe");
     }
