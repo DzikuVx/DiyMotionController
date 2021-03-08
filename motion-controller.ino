@@ -6,6 +6,9 @@
 #include "sbus.h"
 #include "math.h"
 #include "types.h"
+#include "SSD1306.h"
+#include "oled_display.h"
+#include "device_node.h"
 
 #define SBUS_UPDATE_TASK_MS 15
 #define MPU6050_UPDATE_TASK_MS 30
@@ -13,6 +16,8 @@
 #define SERIAL_TASK_MS 50
 #define SERIAL1_RX 25
 #define SERIAL1_TX 14
+#define I2C_SDA_PIN 21
+#define I2C_SCL_PIN 22
 
 #define PIN_BUTTON_UP 4
 #define PIN_BUTTON_DOWN 2
@@ -31,11 +36,15 @@ uint32_t nextSerialTaskMs = 0;
 imuData_t imu;
 dataOutput_t output;
 thumb_joystick_t thumbJoystick;
+DeviceNode device;
 
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
-TaskHandle_t imuTask;
+TaskHandle_t i2cResourceTask;
 TaskHandle_t outputTask;
+
+SSD1306 display(0x3c, I2C_SDA_PIN, I2C_SCL_PIN);
+OledDisplay oledDisplay(&display);
 
 void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY, float sampleZ, const float dev)
 {
@@ -109,15 +118,23 @@ void setup()
 
     delay(50);
 
+    oledDisplay.init();
+    oledDisplay.setPage(OLED_PAGE_BEACON_STATUS);
+
+    delay(50);
+
     pinMode(PIN_THUMB_JOYSTICK_SW, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_TRIGGER, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_UP, INPUT_PULLUP);
+    pinMode(PIN_BUTTON_DOWN, INPUT_PULLUP);
 
     xTaskCreatePinnedToCore(
-        imuTaskHandler, /* Function to implement the task */
-        "imuTask",      /* Name of the task */
-        10000,          /* Stack size in words */
-        NULL,           /* Task input parameter */
-        0,              /* Priority of the task */
-        &imuTask,       /* Task handle. */
+        i2cResourceTaskHandler, /* Function to implement the task */
+        "imuTask",              /* Name of the task */
+        10000,                  /* Stack size in words */
+        NULL,                   /* Task input parameter */
+        0,                      /* Priority of the task */
+        &i2cResourceTask,       /* Task handle. */
         0);
 
     xTaskCreatePinnedToCore(
@@ -143,26 +160,32 @@ int getRcChannel_wrapper(uint8_t channel)
     }
 }
 
-void processJoystickAxis(uint8_t axis, uint8_t pin) {
+void processJoystickAxis(uint8_t axis, uint8_t pin)
+{
     thumbJoystick.raw[axis] = analogRead(pin);
     thumbJoystick.zeroed[axis] = thumbJoystick.calibration.zero[axis] - thumbJoystick.raw[axis];
 
-    if (thumbJoystick.calibration.state == CALIBRATION_DONE) {
+    if (thumbJoystick.calibration.state == CALIBRATION_DONE)
+    {
 
-        if (thumbJoystick.zeroed[axis] > thumbJoystick.max[axis]) {
+        if (thumbJoystick.zeroed[axis] > thumbJoystick.max[axis])
+        {
             thumbJoystick.max[axis] = thumbJoystick.zeroed[axis];
         }
 
-        if (thumbJoystick.zeroed[axis] < thumbJoystick.min[axis]) {
+        if (thumbJoystick.zeroed[axis] < thumbJoystick.min[axis])
+        {
             thumbJoystick.min[axis] = thumbJoystick.zeroed[axis];
         }
 
-        if (thumbJoystick.zeroed[axis] > 0) {
+        if (thumbJoystick.zeroed[axis] > 0)
+        {
             thumbJoystick.position[axis] = fscalef(thumbJoystick.zeroed[axis], 0, thumbJoystick.max[axis], 0.0f, 1.0f);
-        } else {
+        }
+        else
+        {
             thumbJoystick.position[axis] = fscalef(thumbJoystick.zeroed[axis], thumbJoystick.min[axis], 0, -1.0f, 0.0f);
         }
-
     }
 }
 
@@ -203,9 +226,11 @@ void outputTaskHandler(void *pvParameters)
             digitalRead(PIN_BUTTON_TRIGGER) != LOW)
         {
             //TODO Data is broken, time to react or just do nothing
+            device.setActionEnabled(false);
         }
         else
         {
+            device.setActionEnabled(true);
             output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
             output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
             output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
@@ -219,7 +244,6 @@ void outputTaskHandler(void *pvParameters)
             {
                 output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
             }
-
         }
 
         prevTriggerButtonState = triggerButtonState;
@@ -231,45 +255,60 @@ void outputTaskHandler(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-void imuTaskHandler(void *pvParameters)
+void imuSubtask()
+{
+    static uint32_t prevMicros = 0;
+    float dT = (micros() - prevMicros) * 0.000001f;
+    prevMicros = micros();
+
+    if (prevMicros > 0)
+    {
+
+        mpu.getEvent(&acc, &gyro, &temp);
+
+        imu.accAngle.x = (atan(acc.acceleration.y / sqrt(pow(acc.acceleration.x, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
+        imu.accAngle.y = (atan(-1 * acc.acceleration.x / sqrt(pow(acc.acceleration.y, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
+
+        imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_X];
+        imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Y];
+        imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Z];
+
+        imu.gyroNormalized.x = imu.gyro.x * dT;
+        imu.gyroNormalized.y = imu.gyro.y * dT;
+        imu.gyroNormalized.z = imu.gyro.z * dT;
+
+        imu.angle.x = (0.95 * (imu.angle.x + imu.gyroNormalized.x)) + (0.05 * imu.accAngle.x);
+        imu.angle.y = (0.95 * (imu.angle.y + imu.gyroNormalized.y)) + (0.05 * imu.accAngle.y);
+        imu.angle.z = imu.angle.z + imu.gyroNormalized.z;
+
+        /*
+         * Calibration Routine
+         */
+        sensorCalibrate(&imu.gyroCalibration, imu.gyro.x, imu.gyro.y, imu.gyro.z, 3.0f);
+    }
+}
+
+void i2cResourceTaskHandler(void *pvParameters)
 {
     portTickType xLastWakeTime;
     const portTickType xPeriod = MPU6050_UPDATE_TASK_MS / portTICK_PERIOD_MS;
     xLastWakeTime = xTaskGetTickCount();
 
+    /*
+     * MPU6050 and OLED share the same I2C bus
+     * To simplify the implementation and do not have to resolve resource conflicts,
+     * both tasks are called in one thread pinned to the same core
+     */
     for (;;)
     {
         /*
         * Read gyro
         */
-        static uint32_t prevMicros = 0;
-        float dT = (micros() - prevMicros) * 0.000001f;
-        prevMicros = micros();
-
-        if (prevMicros > 0)
-        {
-            mpu.getEvent(&acc, &gyro, &temp);
-
-            imu.accAngle.x = (atan(acc.acceleration.y / sqrt(pow(acc.acceleration.x, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
-            imu.accAngle.y = (atan(-1 * acc.acceleration.x / sqrt(pow(acc.acceleration.y, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
-
-            imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_X];
-            imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Y];
-            imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Z];
-
-            imu.gyroNormalized.x = imu.gyro.x * dT;
-            imu.gyroNormalized.y = imu.gyro.y * dT;
-            imu.gyroNormalized.z = imu.gyro.z * dT;
-
-            imu.angle.x = (0.95 * (imu.angle.x + imu.gyroNormalized.x)) + (0.05 * imu.accAngle.x);
-            imu.angle.y = (0.95 * (imu.angle.y + imu.gyroNormalized.y)) + (0.05 * imu.accAngle.y);
-            imu.angle.z = imu.angle.z + imu.gyroNormalized.z;
-            
-            /*
-             * Calibration Routine
-             */
-            sensorCalibrate(&imu.gyroCalibration, imu.gyro.x, imu.gyro.y, imu.gyro.z, 3.0f);
-        }
+        imuSubtask();
+        /*
+         * Process OLED display
+         */
+        oledDisplay.loop();
 
         // Put task to sleep
         vTaskDelayUntil(&xLastWakeTime, xPeriod);
@@ -286,7 +325,7 @@ int angleToRcChannel(float angle)
 
 int joystickToRcChannel(float angle)
 {
-    const float value = fconstrainf(applyDeadband(angle, 0.05f), -1.0f, 1.0f); 
+    const float value = fconstrainf(applyDeadband(angle, 0.05f), -1.0f, 1.0f);
     return (int)fscalef(value, -1.0f, 1.0f, -200, 200);
 }
 
