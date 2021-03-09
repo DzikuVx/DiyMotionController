@@ -16,8 +16,14 @@
 #define SERIAL_TASK_MS 50
 #define SERIAL1_RX 25
 #define SERIAL1_TX 14
-#define I2C_SDA_PIN 21
-#define I2C_SCL_PIN 22
+#define I2C1_SDA_PIN 21
+#define I2C1_SCL_PIN 22
+
+#define I2C2_SDA_PIN 0
+#define I2C2_SCL_PIN 23
+ 
+TwoWire I2C1 = TwoWire(0); //OLED bus
+TwoWire I2C2 = TwoWire(1); //Gyro bus
 
 #define PIN_BUTTON_THUMB 4
 #define PIN_GPS_RX 2
@@ -42,8 +48,9 @@ uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
 TaskHandle_t i2cResourceTask;
 TaskHandle_t ioTask;
+TaskHandle_t oledTask;
 
-SSD1306 display(0x3c, I2C_SDA_PIN, I2C_SCL_PIN);
+SSD1306Wire display(0x3c, &I2C1);
 OledDisplay oledDisplay(&display);
 
 QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
@@ -100,17 +107,16 @@ void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY
     }
 }
 
-TwoWire 
-
 void setup()
 {
     Serial.begin(115200);
 
     sbusSerial.begin(100000, SERIAL_8E2, SERIAL1_RX, SERIAL1_TX, false, 100UL);
 
-    
+    I2C1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, 50000);
+    I2C2.begin(I2C2_SDA_PIN, I2C2_SCL_PIN, 100000);
 
-    if (!mpu.begin())
+    if (!mpu.begin(0x68, &I2C2, 0))
     {
         Serial.println("MPU6050 init fail");
         while (1)
@@ -151,6 +157,15 @@ void setup()
         NULL,          /* Task input parameter */
         0,             /* Priority of the task */
         &ioTask,       /* Task handle. */
+        0);
+
+    xTaskCreatePinnedToCore(
+        oledTaskHandler, /* Function to implement the task */
+        "oledTask",  /* Name of the task */
+        10000,         /* Stack size in words */
+        NULL,          /* Task input parameter */
+        0,             /* Priority of the task */
+        &oledTask,       /* Task handle. */
         0);
 }
 
@@ -208,7 +223,8 @@ void outputSubtask()
         output.channels[i] = DEFAULT_CHANNEL_VALUE;
     }
 
-    if (buttonTrigger.getState() == TACTILE_STATE_SHORT_PRESS) {
+    if (buttonTrigger.getState() == TACTILE_STATE_SHORT_PRESS) 
+    {
         device.setActionEnabled(!device.getActionEnabled());
     }
 
@@ -222,11 +238,41 @@ void outputSubtask()
 
     if (device.getActionEnabled()) 
     {
-        output.channels[ROLL] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.x);
-        output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
+        output.channels[ROLL] = DEFAULT_CHANNEL_VALUE + angleToRcChannel(imu.angle.x);
+        output.channels[PITCH] = DEFAULT_CHANNEL_VALUE + angleToRcChannel(imu.angle.y);
         output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
         output.channels[THROTTLE] = DEFAULT_CHANNEL_VALUE + joystickToRcChannel(thumbJoystick.position[AXIS_Y]);
+
+        for (uint8_t i = 0; i < SBUS_CHANNEL_COUNT; i++) {
+            output.channels[i] = constrain(output.channels[i], 1000, 2000);
+        }
+
     }
+}
+
+void oledTaskHandler(void *pvParameters)
+{
+    portTickType xLastWakeTime;
+    const portTickType xPeriod = 200 / portTICK_PERIOD_MS;
+    xLastWakeTime = xTaskGetTickCount();
+
+    /*
+     * MPU6050 and OLED share the same I2C bus
+     * To simplify the implementation and do not have to resolve resource conflicts,
+     * both tasks are called in one thread pinned to the same core
+     */
+    for (;;)
+    {
+        /*
+         * Process OLED display
+         */
+        oledDisplay.loop();
+
+        // Put task to sleep
+        vTaskDelayUntil(&xLastWakeTime, xPeriod); //There is a conflict on a I2C due to too much load. Have to put to sleep for a period of time instead
+    }
+
+    vTaskDelete(NULL);
 }
 
 void ioTaskHandler(void *pvParameters)
@@ -271,6 +317,8 @@ void imuSubtask()
         imu.accAngle.x = (atan(acc.acceleration.y / sqrt(pow(acc.acceleration.x, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
         imu.accAngle.y = (atan(-1 * acc.acceleration.x / sqrt(pow(acc.acceleration.y, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
 
+        Serial.println(imu.accAngle.x);
+
         imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_X];
         imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Y];
         imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Z];
@@ -311,7 +359,7 @@ void i2cResourceTaskHandler(void *pvParameters)
         /*
          * Process OLED display
          */
-        oledDisplay.loop();
+        // oledDisplay.loop();
 
         // Put task to sleep
         vTaskDelayUntil(&xLastWakeTime, xPeriod); //There is a conflict on a I2C due to too much load. Have to put to sleep for a period of time instead
