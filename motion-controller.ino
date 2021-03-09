@@ -19,8 +19,8 @@
 #define I2C_SDA_PIN 21
 #define I2C_SCL_PIN 22
 
-#define PIN_BUTTON_UP 4
-#define PIN_BUTTON_DOWN 2
+#define PIN_BUTTON_THUMB 4
+#define PIN_GPS_RX 2
 #define PIN_BUTTON_TRIGGER 15
 
 #define PIN_THUMB_JOYSTICK_X 13
@@ -47,8 +47,7 @@ SSD1306 display(0x3c, I2C_SDA_PIN, I2C_SCL_PIN);
 OledDisplay oledDisplay(&display);
 
 QmuTactile buttonTrigger(PIN_BUTTON_TRIGGER);
-QmuTactile buttonUp(PIN_BUTTON_UP);
-QmuTactile buttonDown(PIN_BUTTON_DOWN);
+QmuTactile buttonThumb(PIN_BUTTON_THUMB);
 QmuTactile buttonJoystick(PIN_THUMB_JOYSTICK_SW);
 
 void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY, float sampleZ, const float dev)
@@ -101,11 +100,15 @@ void sensorCalibrate(struct gyroCalibration_t *cal, float sampleX, float sampleY
     }
 }
 
+TwoWire 
+
 void setup()
 {
     Serial.begin(115200);
 
     sbusSerial.begin(100000, SERIAL_8E2, SERIAL1_RX, SERIAL1_TX, false, 100UL);
+
+    
 
     if (!mpu.begin())
     {
@@ -129,8 +132,7 @@ void setup()
     delay(50);
 
     buttonTrigger.start();
-    buttonUp.start();
-    buttonDown.start();
+    buttonThumb.start();
     buttonJoystick.start();
 
     xTaskCreatePinnedToCore(
@@ -224,15 +226,6 @@ void outputSubtask()
         output.channels[PITCH] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.y);
         output.channels[YAW] = DEFAULT_CHANNEL_VALUE - angleToRcChannel(imu.angle.z) + joystickToRcChannel(thumbJoystick.position[AXIS_X]);
         output.channels[THROTTLE] = DEFAULT_CHANNEL_VALUE + joystickToRcChannel(thumbJoystick.position[AXIS_Y]);
-
-        if (buttonUp.checkFlag(TACTILE_FLAG_PRESSED))
-        {
-            output.channels[THROTTLE] += THROTTLE_BUTTON_STEP;
-        }
-        if (buttonDown.checkFlag(TACTILE_FLAG_PRESSED))
-        {
-            output.channels[THROTTLE] -= THROTTLE_BUTTON_STEP;
-        }
     }
 }
 
@@ -246,8 +239,7 @@ void ioTaskHandler(void *pvParameters)
     {
         buttonTrigger.loop();
         buttonJoystick.loop();
-        buttonUp.loop();
-        buttonDown.loop();
+        buttonThumb.loop();
 
         /*
          * Joystick handling
@@ -315,13 +307,14 @@ void i2cResourceTaskHandler(void *pvParameters)
         * Read gyro
         */
         imuSubtask();
+
         /*
          * Process OLED display
          */
         oledDisplay.loop();
 
         // Put task to sleep
-        vTaskDelayUntil(&xLastWakeTime, xPeriod);
+        vTaskDelayUntil(&xLastWakeTime, xPeriod); //There is a conflict on a I2C due to too much load. Have to put to sleep for a period of time instead
     }
 
     vTaskDelete(NULL);

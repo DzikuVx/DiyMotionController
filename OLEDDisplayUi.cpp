@@ -132,7 +132,6 @@ void OLEDDisplayUi::runLoadingProcess(LoadingStage* stages, uint8_t stagesCount)
     stages[i].callback();
 
     progress += increment;
-    yield();
   }
 
   display->clear();

@@ -78,7 +78,6 @@ class SSD1306Brzo : public OLEDDisplay {
           }
           buffer_back[pos] = buffer[pos];
         }
-        yield();
        }
 
        // If the minBoundY wasn't updated
@@ -107,7 +106,6 @@ class SSD1306Brzo : public OLEDDisplay {
                  k = 0;
                }
            }
-           yield();
        }
        brzo_i2c_write(sendBuffer, k + 1, true);
        brzo_i2c_end_transaction();
@@ -131,7 +129,6 @@ class SSD1306Brzo : public OLEDDisplay {
          }
          i--;
          brzo_i2c_write(sendBuffer,  17,  true);
-         yield();
        }
        brzo_i2c_end_transaction();
      #endif

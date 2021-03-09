@@ -25,7 +25,7 @@ void OledDisplay::page() {
     static uint32_t lastUpdate = 0;
 
     //Do not allow for OLED to be updated too often
-    if (lastUpdate > 0 && millis() - lastUpdate < 200 && _forceDisplay == false) {
+    if (lastUpdate > 0 && millis() - lastUpdate < 300 && _forceDisplay == false) {
         return;
     }
 
@@ -41,6 +41,7 @@ void OledDisplay::page() {
 }
 
 void OledDisplay::renderPageStatus() {
+
     _display->clear();
 
     String val;
