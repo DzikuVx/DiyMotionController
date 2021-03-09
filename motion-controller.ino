@@ -213,8 +213,14 @@ void processJoystickAxis(uint8_t axis, uint8_t pin)
 
 void outputSubtask()
 {
+    // Reset Z on each trigger press
     if (buttonTrigger.checkFlag(TACTILE_FLAG_EDGE_PRESSED))
     {
+        imu.angle.z = 0;
+    }
+
+    // Z updates from gyro happens only when THUMB button is pressed
+    if (!buttonThumb.checkFlag(TACTILE_FLAG_PRESSED)) {
         imu.angle.z = 0;
     }
 
@@ -223,7 +229,7 @@ void outputSubtask()
         output.channels[i] = DEFAULT_CHANNEL_VALUE;
     }
 
-    if (buttonTrigger.getState() == TACTILE_STATE_SHORT_PRESS) 
+    if (buttonTrigger.getState() == TACTILE_STATE_LONG_PRESS) 
     {
         device.setActionEnabled(!device.getActionEnabled());
     }
