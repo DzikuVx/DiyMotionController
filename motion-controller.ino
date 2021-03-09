@@ -11,7 +11,7 @@
 #include "device_node.h"
 
 #define SBUS_UPDATE_TASK_MS 15
-#define MPU6050_UPDATE_TASK_MS 30
+#define MPU6050_UPDATE_TASK_MS 25
 #define OUTPUT_UPDATE_TASK_MS 20
 #define SERIAL_TASK_MS 50
 #define SERIAL1_RX 25
@@ -362,7 +362,7 @@ void i2cResourceTaskHandler(void *pvParameters)
         // oledDisplay.loop();
 
         // Put task to sleep
-        vTaskDelayUntil(&xLastWakeTime, xPeriod); //There is a conflict on a I2C due to too much load. Have to put to sleep for a period of time instead
+        vTaskDelayUntil(&xLastWakeTime, xPeriod);
     }
 
     vTaskDelete(NULL);
