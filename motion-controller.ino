@@ -13,8 +13,8 @@
 /*
  * Choose Trainer output type. Uncommend correcty line
  */
-#define TRAINER_MODE_SBUS
-// #define TRAINER_MODE_PPM
+// #define TRAINER_MODE_SBUS
+#define TRAINER_MODE_PPM
 
 #define MPU6050_UPDATE_TASK_MS 25
 #define OUTPUT_UPDATE_TASK_MS 20
@@ -62,6 +62,7 @@ uint32_t nextSbusTaskMs = 0;
 #define PPM_CHANNELS 8
 
 hw_timer_t * timer = NULL;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 enum ppmState_e {
     PPM_STATE_IDLE,
@@ -77,6 +78,8 @@ void IRAM_ATTR onPpmTimer() {
     static uint8_t ppmOutput = LOW;
     static int usedFrameLength = 0;
     int currentChannelValue;
+
+    portENTER_CRITICAL(&timerMux);
 
     if (ppmState == PPM_STATE_IDLE) {
         ppmState = PPM_STATE_PULSE;
@@ -106,7 +109,7 @@ void IRAM_ATTR onPpmTimer() {
             timerAlarmWrite(timer, currentChannelValue - PPM_PULSE_LENGTH, true);
         }
     }
-
+    portEXIT_CRITICAL(&timerMux);
     digitalWrite(SERIAL1_TX, ppmOutput);
 }
 
