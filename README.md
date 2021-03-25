@@ -8,6 +8,14 @@ Drone or airplane should be capable of Position Hold and Altitude Hold. INAV or 
 
 ![DIY Motion Controller](assets/01.jpg)
 
+# More info
+
+More info about the project can be found here:
+
+* [QuadMeUp Discord Server](https://discord.gg/5YebHyzDwC)
+* [RCGroups](https://www.rcgroups.com/forums/showthread.php?3857149-DIY-Motion-Controller-gesture-control-for-drones)
+* [QuadMeUp](https://quadmeup.com/tag/diy-motion-controller/)
+
 # Short manual for OpenTX, Radiomaster TX16S and INAV
 
 ## OpenTX setup
