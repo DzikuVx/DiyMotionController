@@ -13,8 +13,8 @@
 /*
  * Choose Trainer output type. Uncommend correcty line
  */
-// #define TRAINER_MODE_SBUS
-#define TRAINER_MODE_PPM
+#define TRAINER_MODE_SBUS
+// #define TRAINER_MODE_PPM
 
 #define MPU6050_UPDATE_TASK_MS 25
 #define OUTPUT_UPDATE_TASK_MS 20
