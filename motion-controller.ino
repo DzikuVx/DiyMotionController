@@ -10,7 +10,12 @@
 #include "oled_display.h"
 #include "device_node.h"
 
-#define SBUS_UPDATE_TASK_MS 15
+/*
+ * Choose Trainer output type. Uncommend correcty line
+ */
+#define TRAINER_MODE_SBUS
+// #define TRAINER_MODE_PPM
+
 #define MPU6050_UPDATE_TASK_MS 25
 #define OUTPUT_UPDATE_TASK_MS 20
 #define SERIAL_TASK_MS 50
@@ -36,7 +41,6 @@ TwoWire I2C2 = TwoWire(1); //Gyro bus
 Adafruit_MPU6050 mpu;
 sensors_event_t acc, gyro, temp;
 
-uint32_t nextSbusTaskMs = 0;
 uint32_t nextSerialTaskMs = 0;
 
 imuData_t imu;
@@ -44,8 +48,70 @@ dataOutput_t output;
 thumb_joystick_t thumbJoystick;
 DeviceNode device;
 
+#ifdef TRAINER_MODE_SBUS
+#define SBUS_UPDATE_TASK_MS 15
 uint8_t sbusPacket[SBUS_PACKET_LENGTH] = {0};
 HardwareSerial sbusSerial(1);
+uint32_t nextSbusTaskMs = 0;
+#endif
+
+#ifdef TRAINER_MODE_PPM
+
+#define PPM_FRAME_LENGTH 22500
+#define PPM_PULSE_LENGTH 300
+#define PPM_CHANNELS 8
+
+hw_timer_t * timer = NULL;
+
+enum ppmState_e {
+    PPM_STATE_IDLE,
+    PPM_STATE_PULSE,
+    PPM_STATE_FILL,
+    PPM_STATE_SYNC
+};
+
+void IRAM_ATTR onPpmTimer() {
+
+    static uint8_t ppmState = PPM_STATE_IDLE;
+    static uint8_t ppmChannel = 0;
+    static uint8_t ppmOutput = LOW;
+    static int usedFrameLength = 0;
+    int currentChannelValue;
+
+    if (ppmState == PPM_STATE_IDLE) {
+        ppmState = PPM_STATE_PULSE;
+        ppmChannel = 0;
+        usedFrameLength = 0;
+    }
+
+    if (ppmState == PPM_STATE_PULSE) {
+        ppmOutput = HIGH;
+        usedFrameLength += PPM_PULSE_LENGTH;
+        ppmState = PPM_STATE_FILL;
+
+        timerAlarmWrite(timer, PPM_PULSE_LENGTH, true);
+    } else if (ppmState == PPM_STATE_FILL) {
+        ppmOutput = LOW;
+        currentChannelValue = getRcChannel_wrapper(ppmChannel);
+        
+        ppmChannel++;
+        ppmState = PPM_STATE_PULSE;
+
+        if (ppmChannel > PPM_CHANNELS) {
+            ppmChannel = 0;
+            timerAlarmWrite(timer, PPM_FRAME_LENGTH - usedFrameLength, true);
+            usedFrameLength = 0;
+        } else {
+            usedFrameLength += currentChannelValue - PPM_PULSE_LENGTH;
+            timerAlarmWrite(timer, currentChannelValue - PPM_PULSE_LENGTH, true);
+        }
+    }
+
+    digitalWrite(SERIAL1_TX, ppmOutput);
+}
+
+#endif
+
 TaskHandle_t i2cResourceTask;
 TaskHandle_t ioTask;
 TaskHandle_t oledTask;
@@ -111,7 +177,17 @@ void setup()
 {
     Serial.begin(115200);
 
+#ifdef TRAINER_MODE_PPM
+    pinMode(SERIAL1_TX, OUTPUT);
+    timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer, &onPpmTimer, true);
+    timerAlarmWrite(timer, 12000, true);
+    timerAlarmEnable(timer);
+#endif
+
+#ifdef TRAINER_MODE_SBUS
     sbusSerial.begin(100000, SERIAL_8E2, SERIAL1_RX, SERIAL1_TX, false, 100UL);
+#endif
 
     I2C1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, 50000);
     I2C2.begin(I2C2_SDA_PIN, I2C2_SCL_PIN, 100000);
@@ -323,8 +399,6 @@ void imuSubtask()
         imu.accAngle.x = (atan(acc.acceleration.y / sqrt(pow(acc.acceleration.x, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
         imu.accAngle.y = (atan(-1 * acc.acceleration.x / sqrt(pow(acc.acceleration.y, 2) + pow(acc.acceleration.z, 2))) * 180 / PI);
 
-        Serial.println(imu.accAngle.x);
-
         imu.gyro.x = (gyro.gyro.x * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_X];
         imu.gyro.y = (gyro.gyro.y * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Y];
         imu.gyro.z = (gyro.gyro.z * SENSORS_RADS_TO_DPS) - imu.gyroCalibration.zero[AXIS_Z];
@@ -391,6 +465,7 @@ void loop()
     /* 
      * Send Trainer data in SBUS stream
      */
+#ifdef TRAINER_MODE_SBUS
     if (millis() > nextSbusTaskMs)
     {
         sbusPreparePacket(sbusPacket, false, false, getRcChannel_wrapper);
@@ -398,6 +473,7 @@ void loop()
 
         nextSbusTaskMs = millis() + SBUS_UPDATE_TASK_MS;
     }
+#endif
 
     if (millis() > nextSerialTaskMs)
     {
