@@ -18,13 +18,24 @@ More info about the project can be found here:
 
 # Short manual for OpenTX, Radiomaster TX16S and INAV
 
-## OpenTX setup
+## OpenTX setup with SBUS Trainer input
 
 1. Configure OpenTX to use Serial Port 1 as a SBUS Trainer (System -> Hardware)
 2. Enable Trainer input for your model (Model -> Model Setup -> Trainer Mode Master/Serial)
 3. Configure one of the radio switches to enable `Trainer Sticks` (Model -> Special Functions)
 4. Connect **DIY Motion Controller** to Serial Port 1. Radio RX pin to ESP32 `SERIAL1_TX` pin (14 default)
 5. To enable gesture control, switch configured in point 3 has to be enabled!
+
+## PPM Trainer input
+
+In case of radios that does not have user accessible serial port, PPM mode can be used. 
+
+To enable PPM output on `pin 14`, uncomment `#define TRAINER_MODE_PPM` and comment out `#define TRAINER_MODE_SBUS`
+
+```
+//#define TRAINER_MODE_SBUS
+#define TRAINER_MODE_PPM
+```
 
 ## INAV Setup
 
